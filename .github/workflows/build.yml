@@ -1,27 +1,41 @@
 name: Gerar APK
+
 on:
   push:
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Extrair projeto
-        run: unzip -q '*.zip'
+
+      - name: Localizar a pasta do projeto Android
+        id: proj
+        run: |
+          f=$(find . -name settings.gradle.kts -not -path "*/.git/*" | head -n 1)
+          if [ -z "$f" ]; then echo "settings.gradle.kts não encontrado no repositório"; exit 1; fi
+          d=$(dirname "$f")
+          echo "Projeto em: $d"
+          echo "dir=$d" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
+
       - name: Aceitar licenças do Android SDK
         run: yes | sdkmanager --licenses > /dev/null || true
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
+
       - name: Compilar APK
-        working-directory: DBZSCORE
+        working-directory: ${{ steps.proj.outputs.dir }}
         run: gradle assembleDebug --no-daemon
+
       - uses: actions/upload-artifact@v4
         with:
           name: DBZSCORE-apk
-          path: DBZSCORE/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.proj.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
