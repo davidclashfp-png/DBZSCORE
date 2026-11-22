@@ -1,0 +1,80 @@
+name: Gerar app iOS
+on:
+  workflow_dispatch:
+    inputs:
+      testflight:
+        description: "Enviar ao TestFlight (precisa da conta Apple Developer e dos segredos)"
+        type: boolean
+        default: false
+jobs:
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Descompactar o zip
+        run: |
+          if [ -z "$(find . -name project.yml -path "*ios*" -not -path "./.git/*" | head -n 1)" ]; then
+            z=$(find . -iname "*.zip" -not -path "./.git/*" | head -n 1)
+            if [ -n "$z" ]; then mkdir -p _projeto && unzip -q "$z" -d _projeto; fi
+          fi
+      - name: Localizar o projeto iOS
+        id: proj
+        run: |
+          f=$(find . -name project.yml -path "*ios*" -not -path "./.git/*" | head -n 1)
+          if [ -z "$f" ]; then echo "ios/project.yml nao encontrado"; exit 1; fi
+          echo "dir=$(dirname "$f")" >> "$GITHUB_OUTPUT"
+      - run: brew install xcodegen
+      - name: Gerar o projeto Xcode
+        working-directory: ${{ steps.proj.outputs.dir }}
+        run: xcodegen generate
+      - name: Compilar (sem assinatura)
+        working-directory: ${{ steps.proj.outputs.dir }}
+        run: |
+          xcodebuild archive \
+            -project DBZSCORE.xcodeproj -scheme DBZSCORE -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -archivePath build/DBZSCORE.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER"
+          mkdir -p Payload
+          cp -R build/DBZSCORE.xcarchive/Products/Applications/DBZSCORE.app Payload/
+          zip -q -r DBZSCORE-sem-assinatura.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DBZSCORE-ipa-sem-assinatura
+          path: ${{ steps.proj.outputs.dir }}/DBZSCORE-sem-assinatura.ipa
+      - name: Assinar e enviar ao TestFlight
+        if: ${{ inputs.testflight }}
+        working-directory: ${{ steps.proj.outputs.dir }}
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_KEY_P8: ${{ secrets.APPSTORE_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          for v in APPLE_TEAM_ID APPSTORE_KEY_ID APPSTORE_ISSUER_ID APPSTORE_KEY_P8; do
+            if [ -z "${!v}" ]; then echo "Segredo $v nao configurado"; exit 1; fi
+          done
+          printf '%s\n' "$APPSTORE_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>uploadSymbols</key><true/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath build/DBZSCORE.xcarchive \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
+            -authenticationKeyID "$APPSTORE_KEY_ID" \
+            -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID"
