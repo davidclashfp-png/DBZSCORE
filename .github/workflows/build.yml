@@ -10,6 +10,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Descompactar o zip do projeto (se o repositório tiver só o .zip)
+        run: |
+          if [ -z "$(find . -name settings.gradle.kts -not -path "./.git/*" | head -n 1)" ]; then
+            z=$(find . -iname "*.zip" -not -path "./.git/*" | head -n 1)
+            if [ -n "$z" ]; then
+              echo "Descompactando $z"
+              mkdir -p _projeto
+              unzip -q "$z" -d _projeto
+            fi
+          fi
+
       - name: Localizar a pasta do projeto Android
         id: proj
         run: |
