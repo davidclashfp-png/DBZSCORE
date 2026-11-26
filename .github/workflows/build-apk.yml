@@ -1,0 +1,74 @@
+name: Gerar APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descompactar o zip do projeto (se o repositório tiver só o .zip)
+        run: |
+          if [ -z "$(find . -name settings.gradle.kts -not -path "./.git/*" | head -n 1)" ]; then
+            z=$(find . -iname "*.zip" -not -path "./.git/*" | head -n 1)
+            if [ -n "$z" ]; then
+              echo "Descompactando $z"
+              mkdir -p _projeto
+              unzip -q "$z" -d _projeto
+            fi
+          fi
+
+      - name: Localizar a pasta do projeto Android
+        id: proj
+        run: |
+          f=$(find . -name settings.gradle.kts -not -path "*/.git/*" | head -n 1)
+          if [ -z "$f" ]; then echo "settings.gradle.kts não encontrado no repositório"; exit 1; fi
+          d=$(dirname "$f")
+          echo "Projeto em: $d"
+          echo "dir=$d" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Aceitar licenças do Android SDK
+        run: yes | sdkmanager --licenses > /dev/null || true
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Preparar a chave de assinatura fixa (se o Secret existir)
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/dbzscore.jks"
+            echo "KEYSTORE_PATH=$RUNNER_TEMP/dbzscore.jks" >> "$GITHUB_ENV"
+            echo "Usando a chave fixa."
+          else
+            echo "Secret KEYSTORE_BASE64 ausente: usando a chave de debug padrao."
+          fi
+
+      - name: Compilar APK
+        working-directory: ${{ steps.proj.outputs.dir }}
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: gradle assembleDebug --no-daemon
+
+      - name: Mostrar o SHA-1 da assinatura (para o Google)
+        run: |
+          apk=$(find . -name app-debug.apk -path "*outputs/apk/debug*" | head -n 1)
+          bt=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name apksigner 2>/dev/null | sort | tail -n 1)
+          if [ -n "$bt" ] && [ -n "$apk" ]; then
+            "$bt" verify --print-certs "$apk" | grep -i "SHA-1" || true
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DBZSCORE-apk
+          path: ${{ steps.proj.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
