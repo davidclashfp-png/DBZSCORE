@@ -1,0 +1,49 @@
+name: Publicar versao para iPhone
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descompactar o zip do projeto (se o repositorio tiver so o .zip)
+        run: |
+          if [ -z "$(find . -name build_site.py -not -path "./.git/*" | head -n 1)" ]; then
+            z=$(find . -iname "*.zip" -not -path "./.git/*" | head -n 1)
+            if [ -n "$z" ]; then
+              echo "Descompactando $z"
+              mkdir -p _projeto
+              unzip -q "$z" -d _projeto
+            fi
+          fi
+
+      - name: Montar o site
+        run: |
+          s=$(find . -name build_site.py -not -path "./.git/*" | head -n 1)
+          if [ -z "$s" ]; then echo "web/build_site.py nao encontrado"; exit 1; fi
+          python3 "$s" site
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
